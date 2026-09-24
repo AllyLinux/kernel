@@ -2,87 +2,113 @@ name: Makefile CI
 
 env:
   VERSION: 7.2.7
+
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-    - name: Cache the kernel
-      id: cache-kernel
-      uses: actions/cache@v4
-      with:
-        path: linux-${{ env.VERSION }}
-        key: linux-${{ env.VERSION }}
+      - name: Cache the kernel
+        id: cache-kernel
+        uses: actions/cache@v4
+        with:
+          path: linux-${{ env.VERSION }}
+          key: linux-${{ env.VERSION }}
 
-    # https://kernel.org
-    - name: Download
-      if: steps.cache-kernel.outputs.cache-hit != 'true'
-      run: wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${{ env.VERSION }}.tar.xz
+      # https://kernel.org
+      - name: Download
+        if: steps.cache-kernel.outputs.cache-hit != 'true'
+        run: |
+          wget https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${{ env.VERSION }}.tar.xz
 
-    # https://docs.kernel.org/admin-guide/README.html#installing-the-kernel-source
-    - name: Install the kernel source
-      if: steps.cache-kernel.outputs.cache-hit != 'true'
-      run: |
-        xz -cd linux-${{ env.VERSION }}.tar.xz | tar xvf -
-        cd linux-${{ env.VERSION }}
-        make mrproper
+      # https://docs.kernel.org/admin-guide/README.html#installing-the-kernel-source
+      - name: Install the kernel source
+        if: steps.cache-kernel.outputs.cache-hit != 'true'
+        run: |
+          xz -cd linux-${{ env.VERSION }}.tar.xz | tar xvf -
+          cd linux-${{ env.VERSION }}
+          make mrproper
 
-    - name: Install libelf-dev
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libelf-dev
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libelf-dev \
+            mtools \
+            xorriso \
+            cpio \
+            gzip \
+            gcc \
+            grub-pc-bin \
+            grub-efi-amd64-bin
 
-    # https://docs.kernel.org/admin-guide/README.html#build-directory-for-the-kernel
-    - name: Configure and build the kernel
-      run: |
-        cd linux-${{ env.VERSION }}
-       	cp "7.2/config_kernel_72" .
-        make -j $(nproc)
-        make INSTALL_MOD_PATH=${{ github.workspace }}/iso INSTALL_PATH=${{ github.workspace }}/iso/boot modules_install install
-        ls -l ${{ github.workspace }}/iso/boot
+      # https://docs.kernel.org/admin-guide/README.html#build-directory-for-the-kernel
+      - name: Configure and build the kernel
+        run: |
+          cd linux-${{ env.VERSION }}
+          cp "../7.2/config_kernel_72" .config
+          make olddefconfig
+          make -j"$(nproc)"
 
-    # https://docs.kernel.org/filesystems/ramfs-rootfs-initramfs.html
-    # https://docs.kernel.org/filesystems/ramfs-rootfs-initramfs.html#contents-of-initramfs
-    - name: Create initramfs image
-      run: |
-        mkdir initramfs
-        cat > hello.c << EOF
-        #include <stdio.h>
-        #include <unistd.h>
+          make \
+            INSTALL_MOD_PATH="${{ github.workspace }}/iso" \
+            INSTALL_PATH="${{ github.workspace }}/iso/boot" \
+            modules_install install
 
-        int main(int argc, char *argv[])
-        {
-          printf("Hello world!\n");
-          sleep(999999999);
-        }
-        EOF
-        gcc -static hello.c -o initramfs/init
-        (cd initramfs; find . | cpio -o -H newc | gzip) > iso/boot/initramfs.cpio.gz
+          ls -l "${{ github.workspace }}/iso/boot"
 
-    # https://www.gnu.org/software/grub/manual/grub/html_node/Making-a-GRUB-bootable-CD_002dROM.html
-    - name: Make a GRUB bootable CD-ROM
-      run: |
-        sudo apt-get install -y mtools xorriso
-        mkdir -p iso/boot/grub
-        cat << EOF > iso/boot/grub/grub.cfg
-        set default=0
-        set timeout=0
-        menuentry 'Linux' {
-            linux /boot/vmlinuz-${{ env.VERSION }} console=ttyS0 console=tty0 ignore_loglevel
-            initrd /boot/initramfs.cpio.gz
-        }
-        EOF
-        grub-mkrescue -o grub.iso iso
+      # https://docs.kernel.org/filesystems/ramfs-rootfs-initramfs.html
+      # https://docs.kernel.org/filesystems/ramfs-rootfs-initramfs.html#contents-of-initramfs
+      - name: Create initramfs image
+        run: |
+          mkdir -p initramfs
 
-    - name: Archive the ISO
-      uses: actions/upload-artifact@v4
-      with:
-        name: grub.iso
-        path: grub.iso
+          cat > hello.c << 'EOF'
+          #include <stdio.h>
+          #include <unistd.h>
+
+          int main(int argc, char *argv[])
+          {
+              printf("Hello world!\n");
+              sleep(999999999);
+              return 0;
+          }
+          EOF
+
+          gcc -static hello.c -o initramfs/init
+
+          (
+            cd initramfs
+            find . -print0 | cpio --null -o -H newc
+          ) | gzip > iso/boot/initramfs.cpio.gz
+
+      # https://www.gnu.org/software/grub/manual/grub/html_node/Making-a-GRUB-bootable-CD_002dROM.html
+      - name: Make a GRUB bootable CD-ROM
+        run: |
+          mkdir -p iso/boot/grub
+
+          cat > iso/boot/grub/grub.cfg << 'EOF'
+          set default=0
+          set timeout=0
+
+          menuentry 'Linux' {
+              linux /boot/vmlinuz-7.2.7 console=ttyS0 console=tty0 ignore_loglevel
+              initrd /boot/initramfs.cpio.gz
+          }
+          EOF
+
+          grub-mkrescue -o grub.iso iso
+
+      - name: Archive the ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: grub.iso
+          path: grub.iso
