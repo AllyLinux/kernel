@@ -54,7 +54,7 @@ jobs:
       - name: Configure and build the kernel
         run: |
           cd linux-${{ env.VERSION }}
-          cp "../7.2/config_kernel_72" .config
+          cp "7.2/config_kernel_72" .config
           make olddefconfig
           make -j"$(nproc)"
 
